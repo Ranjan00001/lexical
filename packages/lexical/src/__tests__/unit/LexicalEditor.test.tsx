@@ -27,6 +27,7 @@ import {
   TableRowNode,
 } from '@lexical/table';
 import {JSDOM} from 'jsdom';
+import * as lexical from 'lexical';
 import {
   $createLineBreakNode,
   $createNodeSelection,
@@ -45,8 +46,12 @@ import {
   $parseSerializedNode,
   $setCompositionKey,
   $setSelection,
+  COMMAND_PRIORITY_BEFORE_EDITOR,
+  COMMAND_PRIORITY_BEFORE_LOW,
   COMMAND_PRIORITY_EDITOR,
   COMMAND_PRIORITY_LOW,
+  CommandListenerPriority,
+  CommandListenerPriorityBefore,
   createCommand,
   createEditor,
   EditorState,
@@ -57,6 +62,7 @@ import {
   type LexicalEditor,
   type LexicalNode,
   type LexicalNodeReplacement,
+  mergeRegister,
   ParagraphNode,
   RootNode,
   SKIP_DOM_SELECTION_TAG,
@@ -76,7 +82,7 @@ import {createPortal} from 'react-dom';
 import {createRoot, Root} from 'react-dom/client';
 import invariant from 'shared/invariant';
 import * as ReactTestUtils from 'shared/react-test-utils';
-import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
+import {afterEach, assert, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {emptyFunction} from '../../LexicalUtils';
 import {SerializedParagraphNode} from '../../nodes/LexicalParagraphNode';
@@ -252,7 +258,7 @@ describe('LexicalEditor tests', () => {
       editor.registerNodeTransform(RootNode, $transform);
       editor.registerNodeTransform(ParagraphNode, $transform);
       editor.registerNodeTransform(TextNode, $transform);
-      editor.registerNodeTransform(ParagraphNode, (node) => {
+      editor.registerNodeTransform(ParagraphNode, node => {
         const lastChild = node.getLastChild();
         if (
           $isTextNode(lastChild) &&
@@ -288,7 +294,7 @@ describe('LexicalEditor tests', () => {
       ]);
       events.length = 0;
       // Add a transform that mutates the text
-      await editor.registerNodeTransform(TextNode, (node) => {
+      await editor.registerNodeTransform(TextNode, node => {
         const textContent = node.getTextContent();
         if (textContent.startsWith('[')) {
           return;
@@ -310,14 +316,14 @@ describe('LexicalEditor tests', () => {
         editor.read(() =>
           $getRoot()
             .getAllTextNodes()
-            .map((node) => node.getTextContent()),
+            .map(node => node.getTextContent()),
         ),
       ).toEqual(['[first]', '[second]']);
       events.length = 0;
       await editor.update(() => {
         $getRoot()
           .getAllTextNodes()
-          .forEach((node) =>
+          .forEach(node =>
             node.setTextContent(`:${node.getTextContent().slice(1, -1)}:`),
           );
         paragraphNode.append($createTextNode('third').setMode('token'));
@@ -349,7 +355,7 @@ describe('LexicalEditor tests', () => {
         editor.read(() =>
           $getRoot()
             .getAllTextNodes()
-            .map((node) => node.getTextContent()),
+            .map(node => node.getTextContent()),
         ),
       ).toEqual(['[:first:]', '[:second:]', '[third]', '[fourth]']);
     });
@@ -412,7 +418,7 @@ describe('LexicalEditor tests', () => {
       });
       expect(editor.read(() => $getRoot().getTextContent())).toEqual('');
       expect(editor.read(() => $getEditor())).toBe(editor);
-      editor.registerNodeTransform(TextNode, (node) => {
+      editor.registerNodeTransform(TextNode, node => {
         if (node.getTextContent() === 'This works!') {
           node.replace($createTextNode('Transforms work!'));
         }
@@ -729,7 +735,7 @@ describe('LexicalEditor tests', () => {
     init();
 
     // 2. Add italics
-    const italicsListener = editor.registerNodeTransform(TextNode, (node) => {
+    const italicsListener = editor.registerNodeTransform(TextNode, node => {
       if (
         node.getTextContent() === 'foo' &&
         node.hasFormat('bold') &&
@@ -740,14 +746,14 @@ describe('LexicalEditor tests', () => {
     });
 
     // 1. Add bold
-    const boldListener = editor.registerNodeTransform(TextNode, (node) => {
+    const boldListener = editor.registerNodeTransform(TextNode, node => {
       if (node.getTextContent() === 'foo' && !node.hasFormat('bold')) {
         node.toggleFormat('bold');
       }
     });
 
     // 2. Add underline
-    const underlineListener = editor.registerNodeTransform(TextNode, (node) => {
+    const underlineListener = editor.registerNodeTransform(TextNode, node => {
       if (
         node.getTextContent() === 'foo' &&
         node.hasFormat('bold') &&
@@ -781,7 +787,7 @@ describe('LexicalEditor tests', () => {
     // 2. (Block transform) Add text
     const testParagraphListener = editor.registerNodeTransform(
       ParagraphNode,
-      (paragraph) => {
+      paragraph => {
         if (skipFirst[0]) {
           skipFirst[0] = false;
 
@@ -795,7 +801,7 @@ describe('LexicalEditor tests', () => {
     );
 
     // 2. (Text transform) Add bold to text
-    const boldListener = editor.registerNodeTransform(TextNode, (node) => {
+    const boldListener = editor.registerNodeTransform(TextNode, node => {
       if (node.getTextContent() === 'foo' && !node.hasFormat('bold')) {
         node.toggleFormat('bold');
       }
@@ -804,7 +810,7 @@ describe('LexicalEditor tests', () => {
     // 3. (Block transform) Add italics to bold text
     const italicsListener = editor.registerNodeTransform(
       ParagraphNode,
-      (paragraph) => {
+      paragraph => {
         const child = paragraph.getLastDescendant();
 
         if (
@@ -843,7 +849,7 @@ describe('LexicalEditor tests', () => {
     init();
 
     // 1. [Foo] into [<empty>,Fo,o,<empty>,!,<empty>]
-    const fooListener = editor.registerNodeTransform(TextNode, (node) => {
+    const fooListener = editor.registerNodeTransform(TextNode, node => {
       if (node.getTextContent() === 'Foo' && !hasRun[0]) {
         const [before, after] = node.splitText(2);
 
@@ -859,7 +865,7 @@ describe('LexicalEditor tests', () => {
     // 2. [Foo!] into [<empty>,Fo,o!,<empty>,!,<empty>]
     const megaFooListener = editor.registerNodeTransform(
       ParagraphNode,
-      (paragraph) => {
+      paragraph => {
         const child = paragraph.getFirstChild();
 
         if (
@@ -880,7 +886,7 @@ describe('LexicalEditor tests', () => {
     );
 
     // 3. [Foo!!] into formatted bold [<empty>,Fo,o!!,<empty>]
-    const boldFooListener = editor.registerNodeTransform(TextNode, (node) => {
+    const boldFooListener = editor.registerNodeTransform(TextNode, node => {
       if (node.getTextContent() === 'Foo!!' && !hasRun[2]) {
         node.toggleFormat('bold');
 
@@ -914,7 +920,7 @@ describe('LexicalEditor tests', () => {
 
     const executeTransform = vi.fn();
     let hasBeenRemoved = false;
-    const removeListener = editor.registerNodeTransform(TextNode, (node) => {
+    const removeListener = editor.registerNodeTransform(TextNode, node => {
       if (hasBeenRemoved) {
         executeTransform();
       }
@@ -953,13 +959,13 @@ describe('LexicalEditor tests', () => {
 
     const removeParagraphTransform = editor.registerNodeTransform(
       ParagraphNode,
-      (node) => {
+      node => {
         executeParagraphNodeTransform();
       },
     );
     const removeTextNodeTransform = editor.registerNodeTransform(
       TextNode,
-      (node) => {
+      node => {
         executeTextNodeTransform();
       },
     );
@@ -1045,7 +1051,7 @@ describe('LexicalEditor tests', () => {
         $getRoot()
           .getChildren()
           .filter($isParagraphNode)
-          .forEach((node) => node.remove());
+          .forEach(node => node.remove());
       },
       {discrete: true},
     );
@@ -1098,7 +1104,7 @@ describe('LexicalEditor tests', () => {
         paragraph1.append(...textNodes.slice(3));
       });
 
-      removeTransform = editor.registerNodeTransform(TextNode, (node) => {
+      removeTransform = editor.registerNodeTransform(TextNode, node => {
         textTransformCount[Number(node.__text)]++;
       });
     });
@@ -1166,7 +1172,7 @@ describe('LexicalEditor tests', () => {
     const errorListener = vi.fn();
     init(errorListener);
 
-    const boldListener = editor.registerNodeTransform(TextNode, (node) => {
+    const boldListener = editor.registerNodeTransform(TextNode, node => {
       node.toggleFormat('bold');
     });
 
@@ -1354,14 +1360,14 @@ describe('LexicalEditor tests', () => {
 
       // Subscribe to changes
       useEffect(() => {
-        return editor.registerDecoratorListener<ReactNode>((nextDecorators) => {
+        return editor.registerDecoratorListener<ReactNode>(nextDecorators => {
           setDecorators(nextDecorators);
         });
       }, []);
 
       const decoratedPortals = useMemo(
         () =>
-          Object.keys(decorators).map((nodeKey) => {
+          Object.keys(decorators).map(nodeKey => {
             const reactDecorator = decorators[nodeKey];
             const element = editor.getElementByKey(nodeKey)!;
 
@@ -1936,22 +1942,22 @@ describe('LexicalEditor tests', () => {
     );
 
     expect(editor._commands.has(command)).toEqual(true);
-    expect(editor._commands.get(command)).toEqual([
-      new Set([commandListener, commandListenerTwo]),
-      new Set(),
-      new Set(),
-      new Set(),
-      new Set(),
+    expect(editor._commands.get(command)?.map(v => [...v])).toEqual([
+      [commandListener, commandListenerTwo],
+      [],
+      [],
+      [],
+      [],
     ]);
 
     removeCommandListener();
 
-    expect(editor._commands.get(command)).toEqual([
-      new Set([commandListenerTwo]),
-      new Set(),
-      new Set(),
-      new Set(),
-      new Set(),
+    expect(editor._commands.get(command)?.map(v => [...v])).toEqual([
+      [commandListenerTwo],
+      [],
+      [],
+      [],
+      [],
     ]);
 
     removeCommandListenerTwo();
@@ -1996,7 +2002,7 @@ describe('LexicalEditor tests', () => {
       root.append(paragraph);
       paragraph.append(textNode);
     });
-    editor.registerTextContentListener((text) => {
+    editor.registerTextContentListener(text => {
       fn(text);
     });
 
@@ -2621,7 +2627,7 @@ describe('LexicalEditor tests', () => {
 
     editor.registerMutationListener(
       TextNode,
-      (map) => {
+      map => {
         mutationListener();
         editor.registerMutationListener(
           TextNode,
@@ -2685,6 +2691,133 @@ describe('LexicalEditor tests', () => {
     expect(textContentListener).toHaveBeenCalledTimes(1);
     expect(nodeTransformListener).toHaveBeenCalledTimes(1);
     expect(mutationListener).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls command listeners in deque order', async () => {
+    const calls: string[] = [];
+    let regOrder = 0;
+    const names = {
+      [COMMAND_PRIORITY_BEFORE_EDITOR]: 'before:editor',
+      [COMMAND_PRIORITY_BEFORE_LOW]: 'before:low',
+      [COMMAND_PRIORITY_EDITOR]: 'after:editor',
+      [COMMAND_PRIORITY_LOW]: 'after:low',
+    } as const;
+    const listener = (priority: keyof typeof names) => {
+      const idx = regOrder++;
+      return editor.registerCommand(
+        TEST_COMMAND,
+        () => {
+          calls.push(`${names[priority]}:${idx}`);
+          return false;
+        },
+        priority,
+      );
+    };
+    const TEST_COMMAND = createCommand('TEST_COMMAND');
+    init();
+    const unreg = mergeRegister(
+      listener(COMMAND_PRIORITY_EDITOR),
+      listener(COMMAND_PRIORITY_LOW),
+      listener(COMMAND_PRIORITY_EDITOR),
+      listener(COMMAND_PRIORITY_LOW),
+      listener(COMMAND_PRIORITY_BEFORE_EDITOR),
+      listener(COMMAND_PRIORITY_BEFORE_LOW),
+      listener(COMMAND_PRIORITY_BEFORE_EDITOR),
+      listener(COMMAND_PRIORITY_BEFORE_LOW),
+    );
+    expect(calls).toHaveLength(0);
+    editor.dispatchCommand(TEST_COMMAND, undefined);
+    expect(calls).toEqual([
+      'before:low:7',
+      'before:low:5',
+      'after:low:1',
+      'after:low:3',
+      'before:editor:6',
+      'before:editor:4',
+      'after:editor:0',
+      'after:editor:2',
+    ]);
+    unreg();
+    calls.length = 0;
+    editor.dispatchCommand(TEST_COMMAND, undefined);
+    expect(calls).toEqual([]);
+  });
+  it('maps priorities correctly', () => {
+    // this brute forces to make sure all of the names match exactly what we expect
+    const beforePriorities: [string, number][] = [];
+    const afterPriorities: [string, number][] = [];
+    for (const [k, v] of Object.entries(lexical)) {
+      if (k.startsWith('COMMAND_PRIORITY_')) {
+        assert(
+          typeof v === 'number' && Math.floor(v) === v,
+          'priorities are integers',
+        );
+        if (k.startsWith('COMMAND_PRIORITY_BEFORE')) {
+          expect(v < 0).toBe(true);
+          beforePriorities.push([k, v]);
+        } else {
+          expect(v >= 0).toBe(true);
+          afterPriorities.push([k, v]);
+        }
+      }
+    }
+    beforePriorities.sort((a, b) => a[1] - b[1]);
+    afterPriorities.sort((a, b) => a[1] - b[1]);
+    expect(beforePriorities).toHaveLength(5);
+    expect(afterPriorities).toHaveLength(5);
+    expect(
+      beforePriorities.map(([k]) => k.replace(/^COMMAND_PRIORITY_BEFORE_/, '')),
+    ).toEqual(
+      afterPriorities.map(([k]) => k.replace(/^COMMAND_PRIORITY_/, '')),
+    );
+    init();
+    const command = createCommand('TEST_COMMAND');
+    const listeners: (() => void)[] = [];
+    const calls: string[] = [];
+    for (const count of [0, 1]) {
+      for (const arr of [afterPriorities, beforePriorities]) {
+        for (const [k, v] of arr) {
+          listeners.push(
+            editor.registerCommand(
+              command,
+              () => {
+                calls.push(`${k} ${count}`);
+                return false;
+              },
+              v as CommandListenerPriority | CommandListenerPriorityBefore,
+            ),
+          );
+        }
+      }
+    }
+    editor.dispatchCommand(command, undefined);
+    expect(calls).toEqual([
+      'COMMAND_PRIORITY_BEFORE_CRITICAL 1',
+      'COMMAND_PRIORITY_BEFORE_CRITICAL 0',
+      'COMMAND_PRIORITY_CRITICAL 0',
+      'COMMAND_PRIORITY_CRITICAL 1',
+      'COMMAND_PRIORITY_BEFORE_HIGH 1',
+      'COMMAND_PRIORITY_BEFORE_HIGH 0',
+      'COMMAND_PRIORITY_HIGH 0',
+      'COMMAND_PRIORITY_HIGH 1',
+      'COMMAND_PRIORITY_BEFORE_NORMAL 1',
+      'COMMAND_PRIORITY_BEFORE_NORMAL 0',
+      'COMMAND_PRIORITY_NORMAL 0',
+      'COMMAND_PRIORITY_NORMAL 1',
+      'COMMAND_PRIORITY_BEFORE_LOW 1',
+      'COMMAND_PRIORITY_BEFORE_LOW 0',
+      'COMMAND_PRIORITY_LOW 0',
+      'COMMAND_PRIORITY_LOW 1',
+      'COMMAND_PRIORITY_BEFORE_EDITOR 1',
+      'COMMAND_PRIORITY_BEFORE_EDITOR 0',
+      'COMMAND_PRIORITY_EDITOR 0',
+      'COMMAND_PRIORITY_EDITOR 1',
+    ]);
+    // ensure unregistration works
+    mergeRegister(...listeners)();
+    calls.length = 0;
+    editor.dispatchCommand(command, undefined);
+    expect(calls).toHaveLength(0);
   });
 
   it('allows using the same listener for multiple node types', async () => {
@@ -2772,7 +2905,7 @@ describe('LexicalEditor tests', () => {
     expect(mutationListenerA).toHaveBeenCalledTimes(2);
     expect(mutationListenerB).toHaveBeenCalledTimes(2);
     expect(mutationListenerC).toHaveBeenCalledTimes(1);
-    [mutationListenerA, mutationListenerB, mutationListenerC].forEach((fn) => {
+    [mutationListenerA, mutationListenerB, mutationListenerC].forEach(fn => {
       expect(fn).toHaveBeenLastCalledWith(
         expect.anything(),
         expect.objectContaining({

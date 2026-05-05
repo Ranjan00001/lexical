@@ -9,6 +9,7 @@
 import {
   assertHTML,
   assertSelection,
+  enableCompositionKeyEvents,
   focusEditor,
   html,
   initialize,
@@ -67,6 +68,7 @@ test.describe('Tab', () => {
         await page.keyboard.type(' ');
       }
       await focusEditor(page);
+      await enableCompositionKeyEvents(page);
       // Indent
       await page.keyboard.press('Tab');
       await imeType();
@@ -131,7 +133,7 @@ test.describe('Tab', () => {
     await page.keyboard.type('Foo');
     await page.keyboard.press('Tab');
 
-    page.on('pageerror', (error) => {
+    page.on('pageerror', error => {
       throw new Error(`Uncaught exception: ${error.message}`);
     });
 

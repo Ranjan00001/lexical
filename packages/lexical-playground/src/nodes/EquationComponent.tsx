@@ -76,7 +76,7 @@ export default function EquationComponent({
       return mergeRegister(
         editor.registerCommand(
           SELECTION_CHANGE_COMMAND,
-          (payload) => {
+          payload => {
             const activeElement = document.activeElement;
             const inputElem = inputRef.current;
             if (inputElem !== activeElement) {
@@ -88,7 +88,7 @@ export default function EquationComponent({
         ),
         editor.registerCommand(
           KEY_ESCAPE_COMMAND,
-          (payload) => {
+          payload => {
             const activeElement = document.activeElement;
             const inputElem = inputRef.current;
             if (inputElem === activeElement) {
@@ -127,7 +127,13 @@ export default function EquationComponent({
           ref={inputRef}
         />
       ) : (
-        <ErrorBoundary onError={(e) => editor._onError(e)} fallback={null}>
+        <ErrorBoundary
+          onError={e =>
+            editor._onError(
+              e instanceof Error ? e : new Error(String(e), {cause: e}),
+            )
+          }
+          fallback={null}>
           <KatexRenderer
             equation={equationValue}
             inline={inline}

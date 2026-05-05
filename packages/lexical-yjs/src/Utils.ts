@@ -21,6 +21,7 @@ import {
   DecoratorNode,
   EditorState,
   ElementNode,
+  isLexicalEditor,
   LexicalNode,
   NodeKey,
   RangeSelection,
@@ -89,7 +90,7 @@ function isExcludedProperty(
 export function initializeNodeProperties(binding: BaseBinding): void {
   const {editor, nodeProperties} = binding;
   editor.update(() => {
-    editor._nodes.forEach((nodeInfo) => {
+    editor._nodes.forEach(nodeInfo => {
       const node = new nodeInfo.klass();
       const defaultProperties: {[property: string]: unknown} = {};
       for (const [property, value] of Object.entries(node)) {
@@ -330,12 +331,21 @@ export function $syncPropertiesFromYjs(
           yjsDocMap.delete(prevValue.guid);
         }
 
-        const nestedEditor = createEditor();
         const key = nextValue.guid;
-        nestedEditor._key = key;
         yjsDocMap.set(key, nextValue);
 
-        nextValue = nestedEditor;
+        // If the node already constructed a nested editor (e.g. via
+        // buildEditorFromExtensions in its constructor), reuse it so its
+        // extensions and LexicalBuilder registration survive the sync.
+        // Otherwise, fall back to a bare editor.
+        if (isLexicalEditor(prevValue)) {
+          prevValue._key = key;
+          nextValue = prevValue;
+        } else {
+          const nestedEditor = createEditor();
+          nestedEditor._key = key;
+          nextValue = nestedEditor;
+        }
       }
 
       if (writableNode === undefined) {

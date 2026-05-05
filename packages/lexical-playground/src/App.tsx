@@ -68,6 +68,7 @@ import {PagesReactExtension} from './plugins/PagesReactExtension';
 import PasteLogPlugin from './plugins/PasteLogPlugin';
 import {SpecialTextExtension} from './plugins/SpecialTextExtension';
 import {TabFocusExtension} from './plugins/TabFocusExtension';
+import {TerseExportExtension} from './plugins/TerseExportExtension';
 import TestRecorderPlugin from './plugins/TestRecorderPlugin';
 import {TwitterExtension} from './plugins/TwitterExtension';
 import TypingPerfPlugin from './plugins/TypingPerfPlugin';
@@ -163,7 +164,11 @@ function $prepopulatedRichText() {
 // These are only enabled for rich-text mode
 const PlaygroundRichTextExtension = defineExtension({
   dependencies: [
-    RichTextExtension,
+    configExtension(RichTextExtension, {
+      escapeFormatTriggers: {
+        code: {arrow: true, click: true, enter: true, onlyAtBoundary: true},
+      },
+    }),
     ImagesExtension,
     HorizontalRuleExtension,
     PageBreakExtension,
@@ -199,6 +204,7 @@ const AppExtension = defineExtension({
     PlaygroundAutoLinkExtension,
     ClickableLinkExtension,
     SelectionAlwaysOnDisplayExtension,
+    TerseExportExtension,
   ],
   html: buildHTMLConfig(),
   name: '@lexical/playground',

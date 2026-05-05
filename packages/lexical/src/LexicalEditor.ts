@@ -27,6 +27,7 @@ import {
   TextNode,
 } from '.';
 import {FULL_RECONCILE, NO_DIRTY_NODES} from './LexicalConstants';
+import {DequeSet} from './LexicalDequeSet';
 import {cloneEditorState, createEmptyEditorState} from './LexicalEditorState';
 import {
   addRootElementEvents,
@@ -260,6 +261,13 @@ export interface EditorDOMRenderConfig {
     editor: LexicalEditor,
   ) => boolean;
   /** @internal @experimental */
+  $decorateDOM: <T extends LexicalNode>(
+    node: T,
+    prevNode: null | T,
+    dom: HTMLElement,
+    editor: LexicalEditor,
+  ) => void;
+  /** @internal @experimental */
   $updateDOM: <T extends LexicalNode>(
     nextNode: T,
     prevNode: T,
@@ -422,12 +430,61 @@ export type CommandListener<P> = (payload: P, editor: LexicalEditor) => boolean;
 export type EditableListener = (editable: boolean) => void | (() => void);
 
 export type CommandListenerPriority = 0 | 1 | 2 | 3 | 4;
+export type CommandListenerPriorityBefore =
+  | typeof COMMAND_PRIORITY_BEFORE_CRITICAL
+  | typeof COMMAND_PRIORITY_BEFORE_EDITOR
+  | typeof COMMAND_PRIORITY_BEFORE_HIGH
+  | typeof COMMAND_PRIORITY_BEFORE_LOW
+  | typeof COMMAND_PRIORITY_BEFORE_NORMAL;
 
+/**
+ * {@link LexicalEditor.registerCommand} listener added to the end of the editor priority queue (after critical, high, normal, low)
+ */
 export const COMMAND_PRIORITY_EDITOR = 0;
+/**
+ * {@link LexicalEditor.registerCommand} listener added to the end of the low priority queue (after critical, high, normal; before editor)
+ */
 export const COMMAND_PRIORITY_LOW = 1;
+/**
+ * {@link LexicalEditor.registerCommand} listener added to the end of the normal priority queue (after critical, high; before low, editor)
+ */
 export const COMMAND_PRIORITY_NORMAL = 2;
+/**
+ * {@link LexicalEditor.registerCommand} listener added to the end of the high priority queue (after critical; before normal, low, editor)
+ */
 export const COMMAND_PRIORITY_HIGH = 3;
+/**
+ * {@link LexicalEditor.registerCommand} listener added to the end of the critical priority queue (before high, normal, low, editor)
+ */
 export const COMMAND_PRIORITY_CRITICAL = 4;
+/**
+ * {@link LexicalEditor.registerCommand} listener added to the beginning of the editor priority queue (after critical, high, normal, low)
+ */
+export const COMMAND_PRIORITY_BEFORE_EDITOR = -8;
+/**
+ * {@link LexicalEditor.registerCommand} listener added to the beginning of the low priority queue (after critical, high, normal; before editor)
+ */
+export const COMMAND_PRIORITY_BEFORE_LOW = -7;
+/**
+ * {@link LexicalEditor.registerCommand} listener added to the beginning of the normal priority queue (after critical, high; before low, editor)
+ */
+export const COMMAND_PRIORITY_BEFORE_NORMAL = -6;
+/**
+ * {@link LexicalEditor.registerCommand} listener added to the beginning of the high priority queue (after critical; before normal, low, editor)
+ */
+export const COMMAND_PRIORITY_BEFORE_HIGH = -5;
+/**
+ * {@link LexicalEditor.registerCommand} listener added to the beginning of the critical priority queue (before high, normal, low, editor)
+ */
+export const COMMAND_PRIORITY_BEFORE_CRITICAL = -4;
+
+type Tuple5<T> = readonly [T, T, T, T, T];
+
+function normalizePriority(
+  priority: CommandListenerPriority | CommandListenerPriorityBefore,
+): CommandListenerPriority {
+  return (priority & 7) as CommandListenerPriority;
+}
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export type LexicalCommand<TPayload> = {
@@ -457,9 +514,12 @@ export type LexicalCommand<TPayload> = {
 export type CommandPayloadType<TCommand extends LexicalCommand<unknown>> =
   TCommand extends LexicalCommand<infer TPayload> ? TPayload : never;
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyCommandListener = CommandListener<any>;
+
 type Commands = Map<
   LexicalCommand<unknown>,
-  Array<Set<CommandListener<unknown>>>
+  Tuple5<DequeSet<AnyCommandListener>>
 >;
 
 export type ListenerMap<T> = Map<T, undefined | (() => void)>;
@@ -547,7 +607,7 @@ function initializeConversionCache(
   const conversionCache = new Map();
   const handledConversions = new Set();
   const addConversionsToCache = (map: DOMConversionMap) => {
-    Object.keys(map).forEach((key) => {
+    Object.keys(map).forEach(key => {
       let currentCache = conversionCache.get(key);
 
       if (currentCache === undefined) {
@@ -558,7 +618,7 @@ function initializeConversionCache(
       currentCache.push(map[key]);
     });
   };
-  nodes.forEach((node) => {
+  nodes.forEach(node => {
     const importDOM = node.klass.importDOM;
 
     if (importDOM == null || handledConversions.has(importDOM)) {
@@ -615,6 +675,7 @@ export function getTransformSetFromKlass(
 /** @internal @experimental */
 export const DEFAULT_EDITOR_DOM_CONFIG: EditorDOMRenderConfig = {
   $createDOM: (node, editor) => node.createDOM(editor._config, editor),
+  $decorateDOM: (_node, _prevNode, _dom, _editor) => {},
   $exportDOM: (node, editor) => {
     const registeredNode = getRegisteredNode(editor, node.getType());
     // Use HTMLConfig overrides, if available.
@@ -720,7 +781,7 @@ export function createEditor(editorConfig?: CreateEditorArgs): LexicalEditor {
           // by mocking its static getType
           klass !== LexicalNode
         ) {
-          (['getType', 'clone'] as const).forEach((method) => {
+          (['getType', 'clone'] as const).forEach(method => {
             if (!hasOwnStaticMethod(klass, method)) {
               console.warn(`${name} must implement static "${method}" method`);
             }
@@ -1048,7 +1109,7 @@ export class LexicalEditor {
   registerCommand<P>(
     command: LexicalCommand<P>,
     listener: CommandListener<P>,
-    priority: CommandListenerPriority,
+    priority: CommandListenerPriority | CommandListenerPriorityBefore,
   ): () => void {
     if (priority === undefined) {
       invariant(false, 'Listener for type "command" requires a "priority".');
@@ -1058,11 +1119,11 @@ export class LexicalEditor {
 
     if (!commandsMap.has(command)) {
       commandsMap.set(command, [
-        new Set(),
-        new Set(),
-        new Set(),
-        new Set(),
-        new Set(),
+        new DequeSet(),
+        new DequeSet(),
+        new DequeSet(),
+        new DequeSet(),
+        new DequeSet(),
       ]);
     }
 
@@ -1076,15 +1137,19 @@ export class LexicalEditor {
       );
     }
 
-    const listeners = listenersInPriorityOrder[priority];
-    listeners.add(listener as CommandListener<unknown>);
+    const normalizedPriority = normalizePriority(priority);
+
+    const listeners = listenersInPriorityOrder[normalizedPriority];
+    if (normalizedPriority !== priority) {
+      listeners.addFront(listener);
+    } else {
+      listeners.addBack(listener);
+    }
     return () => {
-      listeners.delete(listener as CommandListener<unknown>);
+      listeners.delete(listener);
 
       if (
-        listenersInPriorityOrder.every(
-          (listenersSet) => listenersSet.size === 0,
-        )
+        listenersInPriorityOrder.every(listenersSet => listenersSet.size === 0)
       ) {
         commandsMap.delete(command);
       }
@@ -1230,10 +1295,10 @@ export class LexicalEditor {
 
     markNodesWithTypesAsDirty(
       this,
-      registeredNodes.map((node) => node.klass.getType()),
+      registeredNodes.map(node => node.klass.getType()),
     );
     return () => {
-      registeredNodes.forEach((node) =>
+      registeredNodes.forEach(node =>
         node.transforms.delete(listener as Transform<LexicalNode>),
       );
     };

@@ -7,15 +7,23 @@
  */
 
 export {
+  $exportMimeTypeFromSelection,
   $generateJSONFromSelectedNodes,
   $generateNodesFromSerializedNodes,
   $getClipboardDataFromSelection,
   $getHtmlContent,
   $getLexicalContent,
+  $handlePlainTextDrop,
+  $handleRichTextDrop,
   $insertDataTransferForPlainText,
   $insertDataTransferForRichText,
   $insertGeneratedNodes,
+  $writeDragSourceToDataTransfer,
   copyToClipboard,
+  type ExportMimeTypeConfig,
+  type ExportMimeTypeFunction,
+  type GetClipboardDataConfig,
+  GetClipboardDataExtension,
   type LexicalClipboardData,
   setLexicalClipboardDataTransfer,
 } from './clipboard';

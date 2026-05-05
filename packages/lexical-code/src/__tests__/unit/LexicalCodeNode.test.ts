@@ -59,7 +59,7 @@ const editorConfig = Object.freeze({
 const SPACES4 = ' '.repeat(4);
 
 describe('LexicalCodeNode tests', () => {
-  initializeUnitTest((testEnv) => {
+  initializeUnitTest(testEnv => {
     test('CodeNode.constructor', async () => {
       const {editor} = testEnv;
 
@@ -673,7 +673,7 @@ describe('LexicalCodeNode tests', () => {
             'caret at start of line (second line)',
             () => {
               const nodes = $dfs();
-              const linebreak = nodes.filter((dfsNode) =>
+              const linebreak = nodes.filter(dfsNode =>
                 $isLineBreakNode(dfsNode.node),
               )[0].node;
               linebreak.selectNext(0, 0);
@@ -748,7 +748,7 @@ describe('LexicalCodeNode tests', () => {
             'caret immediately before code (second line)',
             () => {
               const nodes = $dfs();
-              const linebreak = nodes.filter((dfsNode) =>
+              const linebreak = nodes.filter(dfsNode =>
                 $isLineBreakNode(dfsNode.node),
               )[0].node;
               if (tabOrSpaces === 'tab') {
@@ -767,7 +767,7 @@ describe('LexicalCodeNode tests', () => {
               expect(selection.isCollapsed()).toBe(true);
               if (moveTo === 'start') {
                 const nodes = $dfs();
-                const linebreak = nodes.filter((dfsNode) =>
+                const linebreak = nodes.filter(dfsNode =>
                   $isLineBreakNode(dfsNode.node),
                 )[0].node;
                 const tabOrSpace = linebreak.getNextSibling();
@@ -830,7 +830,7 @@ describe('LexicalCodeNode tests', () => {
             'caret in between space (second line)',
             () => {
               const nodes = $dfs();
-              const linebreak = nodes.filter((dfsNode) =>
+              const linebreak = nodes.filter(dfsNode =>
                 $isLineBreakNode(dfsNode.node),
               )[0].node;
               if (tabOrSpaces === 'tab') {
@@ -875,7 +875,7 @@ describe('LexicalCodeNode tests', () => {
             'caret in between code',
             () => {
               const nodes = $dfs();
-              const codeHighlight = nodes.filter((dfsNode) =>
+              const codeHighlight = nodes.filter(dfsNode =>
                 $isCodeHighlightNode(dfsNode.node),
               )[tabOrSpaces === 'tab' ? 0 : 1].node;
               const index = codeHighlight.getTextContent().indexOf('tion');
@@ -917,7 +917,7 @@ describe('LexicalCodeNode tests', () => {
             'caret in between code (after space)',
             () => {
               const nodes = $dfs();
-              const codeHighlight = nodes.filter((dfsNode) =>
+              const codeHighlight = nodes.filter(dfsNode =>
                 $isCodeHighlightNode(dfsNode.node),
               )[tabOrSpaces === 'tab' ? 1 : 2].node;
               const index = codeHighlight.getTextContent().indexOf('oo');
@@ -959,7 +959,7 @@ describe('LexicalCodeNode tests', () => {
             'non-collapsed multi-line selection',
             () => {
               const nodes = $dfs();
-              const codeHighlightDFSNodes = nodes.filter((dfsNode) =>
+              const codeHighlightDFSNodes = nodes.filter(dfsNode =>
                 $isCodeHighlightNode(dfsNode.node),
               );
               const secondCodeHighlight = codeHighlightDFSNodes[1].node;
