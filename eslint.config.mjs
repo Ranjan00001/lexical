@@ -10,6 +10,7 @@ import {fixupPluginRules} from '@eslint/compat';
 import js from '@eslint/js';
 import lexicalInternalPlugin from '@lexical/eslint-plugin-internal';
 import prettierConfig from 'eslint-config-prettier';
+import compat from 'eslint-plugin-compat';
 import _headerPlugin from 'eslint-plugin-header';
 import importXPlugin from 'eslint-plugin-import-x';
 import jsxA11yPlugin from 'eslint-plugin-jsx-a11y';
@@ -402,6 +403,19 @@ export default [
     },
   },
 
+  // Override: Package sources - require /* @__PURE__ */ annotations on
+  // module-scope calls to the side-effect-free lexical factories
+  // (defineExtension, createCommand, defineImportRule, ...) so bundlers
+  // can tree-shake unused definitions. The pre-commit `eslint --fix`
+  // inserts them automatically. Not applied to tests (never bundled).
+  {
+    files: ['packages/**/src/**'],
+    ignores: ['packages/**/src/__tests__/**'],
+    rules: {
+      '@lexical/internal/require-pure-annotation': ERROR,
+    },
+  },
+
   // Override: Tests - allow imports from self
   {
     files: ['packages/**/__tests__/**'],
@@ -418,6 +432,33 @@ export default [
     rules: {
       'react-hooks/globals': OFF,
       'react-hooks/immutability': OFF,
+    },
+  },
+
+  // Override: Playwright e2e tests - flag unawaited promise-returning
+  // Playwright calls. An un-awaited `page.setViewportSize(...)` (or any
+  // method with `pause: true` metainfo) under `--debug` leaves
+  // `Debugger._pausedCall` set indefinitely, causing every subsequent
+  // `page.pause()` to bail at the "already paused" early-return.
+  {
+    files: ['packages/lexical-playground/__tests__/**/*.?(m)js'],
+    rules: {
+      'no-restricted-syntax': [
+        ERROR,
+        'WithStatement',
+        {
+          message:
+            'Promise-returning Playwright call must be awaited (or returned). Unawaited calls poison Debugger._pausedCall under --debug and break page.pause().',
+          selector:
+            'ExpressionStatement > CallExpression > MemberExpression[object.name=/^(page|frame|leftFrame|rightFrame|context)$/][property.name=/^(addInitScript|addScriptTag|addStyleTag|bringToFront|check|click|close|dblclick|dispatchEvent|emulateMedia|evaluate|evaluateHandle|exposeBinding|exposeFunction|fill|focus|goBack|goForward|goto|hover|pause|press|reload|screenshot|selectOption|setChecked|setContent|setExtraHTTPHeaders|setInputFiles|setViewportSize|tap|type|uncheck|waitForEvent|waitForFunction|waitForLoadState|waitForNavigation|waitForRequest|waitForResponse|waitForSelector|waitForTimeout|waitForURL)$/]',
+        },
+        {
+          message:
+            'Promise-returning Playwright call must be awaited (or returned). Unawaited calls poison Debugger._pausedCall under --debug and break page.pause().',
+          selector:
+            "ExpressionStatement > CallExpression > MemberExpression[object.type='MemberExpression'][object.object.name=/^(page|frame|leftFrame|rightFrame)$/][object.property.name=/^(keyboard|mouse|touchscreen)$/]",
+        },
+      ],
     },
   },
 
@@ -447,4 +488,7 @@ export default [
 
   // Prettier must be last to override formatting rules
   prettierConfig,
+
+  // Compatibility with browserslist
+  compat.configs['flat/recommended'],
 ];

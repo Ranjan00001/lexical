@@ -26,6 +26,7 @@ import type {
   LexicalCommand,
   LexicalEditor,
   LexicalNode,
+  NodeKey,
   PointCaret,
   RangeSelection,
   SiblingCaret,
@@ -35,6 +36,7 @@ import {
   $getClipboardDataFromSelection,
   copyToClipboard,
 } from '@lexical/clipboard';
+import invariant from '@lexical/internal/invariant';
 import {
   $findMatchingParent,
   addClassNamesToElement,
@@ -75,6 +77,7 @@ import {
   FORMAT_TEXT_COMMAND,
   getDOMSelection,
   INSERT_PARAGRAPH_COMMAND,
+  IS_FIREFOX,
   isDOMNode,
   isHTMLElement,
   KEY_ARROW_DOWN_COMMAND,
@@ -87,8 +90,6 @@ import {
   KEY_TAB_COMMAND,
   SELECTION_CHANGE_COMMAND,
 } from 'lexical';
-import {IS_FIREFOX} from 'shared/environment';
-import invariant from 'shared/invariant';
 
 import {$isTableCellNode} from './LexicalTableCellNode';
 import {
@@ -109,6 +110,12 @@ import {
 } from './LexicalTableUtils';
 
 const LEXICAL_ELEMENT_KEY = '__lexicalTableSelection';
+
+function $getTableNodeByKeyOrThrow(key: NodeKey): TableNode {
+  const tableNode = $getNodeByKeyOrThrow(key);
+  invariant($isTableNode(tableNode), 'Expected TableNode for key %s', key);
+  return tableNode;
+}
 
 const isPointerDownOnEvent = (event: PointerEvent) => {
   return (event.buttons & 1) === 1;
@@ -180,52 +187,60 @@ export function registerTableWindowHandlers(
   editor: LexicalEditor,
   tableObservers: TableObservers,
 ) {
-  const rootElement = editor.getRootElement();
-  const editorWindow = editor._window;
-  if (!rootElement || !editorWindow) {
-    return () => {};
-  }
-
-  const pointerDownCallback = (event: PointerEvent) => {
-    const target = event.target;
-    if (
-      event.button !== 0 ||
-      !isDOMNode(target) ||
-      !rootElement.contains(target)
-    ) {
+  // Use registerRootListener so the pointerdown handler is (re)attached
+  // whenever the root element is set. This is required for the Extension API,
+  // where register() runs before the ContentEditable mounts and getRootElement()
+  // is still null.
+  return editor.registerRootListener(rootElement => {
+    if (rootElement === null) {
       return;
     }
-    const selectionInfo = getTableObserverFromCellNode(target);
+    const editorWindow = editor._window;
+    if (editorWindow === null) {
+      return;
+    }
 
-    editor.update(() => {
-      // Clear highlights from all tables (even one we're actively clicking on)
-      const selection = $getSelection();
-      if ($isTableSelection(selection)) {
-        for (const [observer] of tableObservers.observers.values()) {
-          observer.$clearHighlight(false);
-        }
-        $setSelection(null);
-        editor.dispatchCommand(SELECTION_CHANGE_COMMAND, undefined);
-      }
-      if (!selectionInfo) {
+    const pointerDownCallback = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        event.button !== 0 ||
+        !isDOMNode(target) ||
+        !rootElement.contains(target)
+      ) {
         return;
       }
-      const {tableObserver, tableElement, cellElement} = selectionInfo;
-      $handleTableClick(
-        editor,
-        event,
-        cellElement,
-        tableElement,
-        tableObserver,
-        tableObservers,
-      );
-    });
-  };
+      const selectionInfo = getTableObserverFromCellNode(target);
 
-  editorWindow.addEventListener('pointerdown', pointerDownCallback);
-  return () => {
-    editorWindow.removeEventListener('pointerdown', pointerDownCallback);
-  };
+      editor.update(() => {
+        // Clear highlights from all tables (even one we're actively clicking on)
+        const selection = $getSelection();
+        if ($isTableSelection(selection)) {
+          for (const [observer] of tableObservers.observers.values()) {
+            observer.$clearHighlight(false);
+          }
+          $setSelection(null);
+          editor.dispatchCommand(SELECTION_CHANGE_COMMAND, undefined);
+        }
+        if (!selectionInfo) {
+          return;
+        }
+        const {tableObserver, tableElement, cellElement} = selectionInfo;
+        $handleTableClick(
+          editor,
+          event,
+          cellElement,
+          tableElement,
+          tableObserver,
+          tableObservers,
+        );
+      });
+    };
+
+    editorWindow.addEventListener('pointerdown', pointerDownCallback);
+    return () => {
+      editorWindow.removeEventListener('pointerdown', pointerDownCallback);
+    };
+  });
 }
 
 function $handleTableClick(
@@ -320,7 +335,7 @@ function $handleTableClick(
   };
 
   tableObserver.pointerType = event.pointerType;
-  const tableNode = $getNodeByKeyOrThrow<TableNode>(tableObserver.tableNodeKey);
+  const tableNode = $getTableNodeByKeyOrThrow(tableObserver.tableNodeKey);
   const prevSelection = $getPreviousSelection();
   // We can't trust Firefox to do the right thing with the selection and
   // we don't have a proper state machine to do this "correctly" but
@@ -885,9 +900,7 @@ export function $handleTableSelectionChangeCommand(
     $isRangeSelection(selection) &&
     selection.isCollapsed()
   ) {
-    const tableNode = $getNodeByKeyOrThrow<TableNode>(
-      shouldCheckSelectionForTable,
-    );
+    const tableNode = $getTableNodeByKeyOrThrow(shouldCheckSelectionForTable);
     const anchor = selection.anchor.getNode();
     const firstRow = tableNode.getFirstChild();
     const anchorCell = $findCellNode(anchor);
@@ -923,7 +936,7 @@ export function $handleTableSelectionChangeCommand(
   const tableNodesAndObservers = Array.from(
     tableObservers.observers.entries(),
   ).map(([tableKey, [tableObserver]]) => ({
-    tableNode: $getNodeByKeyOrThrow<TableNode>(tableKey),
+    tableNode: $getTableNodeByKeyOrThrow(tableKey),
     tableObserver,
   }));
   for (const {tableNode, tableObserver} of tableNodesAndObservers) {
@@ -1068,7 +1081,7 @@ function $fixTableSelectionForSelectedTable(
   if (!selection.is(prevSelection)) {
     return;
   }
-  const tableNode = $getNodeByKeyOrThrow<TableNode>(selection.tableKey);
+  const tableNode = $getTableNodeByKeyOrThrow(selection.tableKey);
   // if selection goes outside of the table we need to change it to Range selection
   const domSelection = getDOMSelection(editorWindow);
   if (domSelection && domSelection.anchorNode && domSelection.focusNode) {
@@ -1903,6 +1916,7 @@ function $handleArrowKey(
 
   const selection = $getSelection();
 
+  // Handle arrow key into a table (including from a table into a nested table)
   if (!$isSelectionInTable(selection, tableNode)) {
     if ($isRangeSelection(selection)) {
       if (direction === 'backward') {
@@ -2201,7 +2215,10 @@ function $handleArrowKey(
       }
     }
   } else if ($isTableSelection(selection)) {
-    const {anchor, focus} = selection;
+    const {anchor, focus, tableKey} = selection;
+    if (tableKey !== tableNode.getKey()) {
+      return false;
+    }
     const anchorCellNode = $findMatchingParent(
       anchor.getNode(),
       $isTableCellNode,

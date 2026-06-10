@@ -9,6 +9,7 @@
 import {$createCodeNode, CodeNode} from '@lexical/code-core';
 import {createHeadlessEditor} from '@lexical/headless';
 import {$generateHtmlFromNodes, $generateNodesFromDOM} from '@lexical/html';
+import invariant from '@lexical/internal/invariant';
 import {$createLinkNode, LinkNode} from '@lexical/link';
 import {
   $createListItemNode,
@@ -18,6 +19,7 @@ import {
 } from '@lexical/list';
 import {$createQuoteNode, HeadingNode, QuoteNode} from '@lexical/rich-text';
 import {
+  $addUpdateTag,
   $copyNode,
   $createLineBreakNode,
   $createParagraphNode,
@@ -30,11 +32,15 @@ import {
   $insertNodes,
   $isElementNode,
   $isLineBreakNode,
+  $isParagraphNode,
   $isRangeSelection,
   $isTextNode,
+  $setCompositionKey,
   $setSelectionFromCaretRange,
   $setState,
+  COMPOSITION_END_TAG,
   KEY_ENTER_COMMAND,
+  type TextNode,
 } from 'lexical';
 import {assert, describe, expect, it} from 'vitest';
 
@@ -377,6 +383,11 @@ describe('Markdown', () => {
     {
       html: '<p><b><strong style="white-space: pre-wrap;">Hello</strong></b><span style="white-space: pre-wrap;"> world</span></p>',
       md: '**Hello** world',
+    },
+    {
+      html: '<p><b><strong style="white-space: pre-wrap;">Bold label:</strong></b><span style="white-space: pre-wrap;">&nbsp;Following paragraph text.</span></p>',
+      md: '**Bold label:**\u00A0Following paragraph text.',
+      skipExport: true,
     },
     {
       html: '<p><i><b><strong style="white-space: pre-wrap;">Hello</strong></b></i><span style="white-space: pre-wrap;"> world</span></p>',
@@ -744,6 +755,10 @@ describe('Markdown', () => {
       md: '*text**text***',
     },
     {
+      html: '<p><b><strong style="white-space: pre-wrap;">text</strong></b><i><b><strong style="white-space: pre-wrap;">text</strong></b></i></p>',
+      md: '**text*text***',
+    },
+    {
       html: '<p><i><em style="white-space: pre-wrap;">foo**bar</em></i></p>',
       md: '*foo**bar*',
       mdAfterExport: '*foo\\*\\*bar*',
@@ -862,7 +877,9 @@ describe('Markdown', () => {
       );
 
       expect(
-        editor.getEditorState().read(() => $generateHtmlFromNodes(editor)),
+        editor
+          .getEditorState()
+          .read(() => $generateHtmlFromNodes(editor), {editor}),
       ).toBe(html);
     });
   }
@@ -1389,6 +1406,222 @@ describe('Markdown', () => {
 
       expect(editor.read(() => $generateHtmlFromNodes(editor))).toBe(
         '<p><span style="white-space: pre-wrap;">```</span></p>',
+      );
+    });
+
+    it('should transform element markdown on Enter when trailing space was not required (custom element transformer)', () => {
+      const ELEMENT_TRIGGERED_FENCE: ElementTransformer = {
+        dependencies: [CodeNode],
+        export: () => null,
+        regExp: /^`{3,}(\w+)?$/,
+        replace: (parentNode, children, match, isImport) => {
+          const node = $createCodeNode(match[1]);
+          node.append(...children);
+          parentNode.replace(node);
+          if (!isImport) {
+            node.select(0, 0);
+          }
+        },
+        triggerOnEnter: true,
+        type: 'element',
+      };
+
+      const editor = createHeadlessEditor({
+        nodes: [
+          HeadingNode,
+          ListNode,
+          ListItemNode,
+          QuoteNode,
+          CodeNode,
+          LinkNode,
+        ],
+      });
+
+      registerMarkdownShortcuts(editor, [ELEMENT_TRIGGERED_FENCE]);
+
+      editor.update(
+        () => {
+          const root = $getRoot();
+          const paragraph = $createParagraphNode();
+          root.append(paragraph);
+          paragraph.selectEnd();
+          const selection = $getSelection();
+          if ($isRangeSelection(selection)) {
+            selection.insertText('```');
+          }
+        },
+        {discrete: true},
+      );
+
+      editor.update(
+        () => {
+          editor.dispatchCommand(KEY_ENTER_COMMAND, null);
+        },
+        {discrete: true},
+      );
+
+      expect(editor.read(() => $generateHtmlFromNodes(editor))).toBe(
+        '<pre spellcheck="false"></pre>',
+      );
+    });
+
+    it('should transform heading on Enter when a line was inserted at once (no trailing space listener trigger)', () => {
+      const editor = createHeadlessEditor({
+        nodes: [
+          HeadingNode,
+          ListNode,
+          ListItemNode,
+          QuoteNode,
+          CodeNode,
+          LinkNode,
+        ],
+      });
+
+      registerMarkdownShortcuts(editor, [HEADING]);
+
+      editor.update(
+        () => {
+          const root = $getRoot();
+          const paragraph = $createParagraphNode();
+          root.append(paragraph);
+          paragraph.selectEnd();
+          const selection = $getSelection();
+          if ($isRangeSelection(selection)) {
+            selection.insertText('## ');
+          }
+        },
+        {discrete: true},
+      );
+
+      editor.update(
+        () => {
+          editor.dispatchCommand(KEY_ENTER_COMMAND, null);
+        },
+        {discrete: true},
+      );
+
+      expect(editor.read(() => $generateHtmlFromNodes(editor))).toBe(
+        '<h2><br></h2>',
+      );
+    });
+  });
+
+  describe('composition-end trigger characters (#7026)', () => {
+    function buildEditor() {
+      const editor = createHeadlessEditor({
+        nodes: [
+          HeadingNode,
+          ListNode,
+          ListItemNode,
+          QuoteNode,
+          CodeNode,
+          LinkNode,
+        ],
+      });
+      registerMarkdownShortcuts(editor, TRANSFORMERS);
+      return editor;
+    }
+
+    function $getTextNode(): TextNode {
+      const paragraph = $getRoot().getFirstChildOrThrow();
+      invariant(
+        $isParagraphNode(paragraph),
+        'expected ParagraphNode at root[0]',
+      );
+      const textNode = paragraph.getFirstChildOrThrow();
+      invariant($isTextNode(textNode), 'expected TextNode at paragraph[0]');
+      return textNode;
+    }
+
+    it('applies inline code when the closing backtick is committed via compositionend', () => {
+      const editor = buildEditor();
+
+      // Set up "`hello" with the caret at offset 6. The first backtick was
+      // typed normally, the rest mirrors what is in the editor once the
+      // German dead-key sequence "` h e l l o" has resolved.
+      editor.update(
+        () => {
+          const paragraph = $createParagraphNode();
+          $getRoot().append(paragraph);
+          const textNode = $createTextNode('`hello');
+          paragraph.append(textNode);
+          paragraph.selectEnd();
+        },
+        {discrete: true},
+      );
+
+      // Pretend compositionupdate is in progress: the backtick is pushed into
+      // the text node, the caret advances to the trailing position (collapsed,
+      // matching what a real compositionupdate leaves behind), and the editor
+      // is marked composing so the markdown listener short-circuits on
+      // `editor.isComposing()`.
+      editor.update(
+        () => {
+          const textNode = $getTextNode();
+          $setCompositionKey(textNode.getKey());
+          textNode.setTextContent('`hello`');
+          textNode.select(7, 7);
+        },
+        {discrete: true},
+      );
+
+      // compositionend flush: the text is already in place, the caret stays
+      // where it is, and the COMPOSITION_END_TAG is added. Without the
+      // bypass the listener would bail on `selection.is(prevSelection)`.
+      editor.update(
+        () => {
+          $setCompositionKey(null);
+          $addUpdateTag(COMPOSITION_END_TAG);
+          $getTextNode().markDirty();
+        },
+        {discrete: true},
+      );
+
+      expect(editor.read(() => $generateHtmlFromNodes(editor))).toBe(
+        '<p><code spellcheck="false" style="white-space: pre-wrap;"><span>hello</span></code></p>',
+      );
+    });
+
+    it('applies inline code when compositionend commits the trigger as a multi-character chunk', () => {
+      const editor = buildEditor();
+
+      // Some IMEs (and synthetic event sources) skip compositionupdate and
+      // land the entire composed run on compositionend. Model that here:
+      // the caret stays at offset 6 across the composition, then jumps to 8
+      // when compositionend commits "a`". The transform should still fire,
+      // which requires the offset-jump bypass (the selection-equality bypass
+      // alone is not enough here).
+      editor.update(
+        () => {
+          const paragraph = $createParagraphNode();
+          $getRoot().append(paragraph);
+          const textNode = $createTextNode('`hello');
+          paragraph.append(textNode);
+          paragraph.selectEnd();
+        },
+        {discrete: true},
+      );
+
+      editor.update(
+        () => {
+          $setCompositionKey($getTextNode().getKey());
+        },
+        {discrete: true},
+      );
+
+      editor.update(
+        () => {
+          $setCompositionKey(null);
+          $addUpdateTag(COMPOSITION_END_TAG);
+          const textNode = $getTextNode();
+          textNode.setTextContent('`helloa`');
+          textNode.select(8, 8);
+        },
+        {discrete: true},
+      );
+
+      expect(editor.read(() => $generateHtmlFromNodes(editor))).toBe(
+        '<p><code spellcheck="false" style="white-space: pre-wrap;"><span>helloa</span></code></p>',
       );
     });
   });

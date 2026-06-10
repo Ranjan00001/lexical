@@ -13,9 +13,10 @@ import type {
   TextMatchTransformer,
   Transformer,
 } from './MarkdownTransformers';
-import type {ElementNode, LexicalEditor, TextNode} from 'lexical';
+import type {ElementNode, LexicalEditor, LexicalNode, TextNode} from 'lexical';
 
 import {$isCodeNode} from '@lexical/code-core';
+import invariant from '@lexical/internal/invariant';
 import {
   $addUpdateTag,
   $createRangeSelection,
@@ -27,12 +28,12 @@ import {
   $setSelection,
   COLLABORATION_TAG,
   COMMAND_PRIORITY_LOW,
+  COMPOSITION_END_TAG,
   HISTORIC_TAG,
   HISTORY_PUSH_TAG,
   KEY_ENTER_COMMAND,
   mergeRegister,
 } from 'lexical';
-import invariant from 'shared/invariant';
 
 import {canContainTransformableMarkdown} from './importTextTransformers';
 import {TRANSFORMERS} from './MarkdownTransformers';
@@ -43,6 +44,7 @@ function runElementTransformers(
   anchorNode: TextNode,
   anchorOffset: number,
   elementTransformers: ReadonlyArray<ElementTransformer>,
+  triggerOnEnter?: boolean,
 ): boolean {
   const grandParentNode = parentNode.getParent();
 
@@ -61,18 +63,21 @@ function runElementTransformers(
   // TODO:
   // Can have a quick check if caret is close enough to the beginning of the string (e.g. offset less than 10-20)
   // since otherwise it won't be a markdown shortcut, but tables are exception
-  if (textContent[anchorOffset - 1] !== ' ') {
-    return false;
+  if (!triggerOnEnter) {
+    if (textContent[anchorOffset - 1] !== ' ') {
+      return false;
+    }
   }
 
   for (const {regExp, replace} of elementTransformers) {
     const match = textContent.match(regExp);
 
-    if (
-      match &&
-      match[0].length ===
-        (match[0].endsWith(' ') ? anchorOffset : anchorOffset - 1)
-    ) {
+    const expectedMatchLength =
+      triggerOnEnter || (match && match[0].endsWith(' '))
+        ? anchorOffset
+        : anchorOffset - 1;
+
+    if (match && match[0].length === expectedMatchLength) {
       const nextSiblings = anchorNode.getNextSiblings();
       const [leadingNode, remainderNode] = anchorNode.splitText(anchorOffset);
       const siblings = remainderNode
@@ -258,12 +263,9 @@ function $runTextFormatTransformers(
 
     // Go through text node siblings and search for opening tag
     // if haven't found it within the same text node as closing tag
-    let sibling: TextNode | null = openNode;
+    let sibling: LexicalNode | null = openNode;
 
-    while (
-      openTagStartIndex < 0 &&
-      (sibling = sibling.getPreviousSibling<TextNode>())
-    ) {
+    while (openTagStartIndex < 0 && (sibling = sibling.getPreviousSibling())) {
       if ($isLineBreakNode(sibling)) {
         break;
       }
@@ -436,6 +438,9 @@ export function registerMarkdownShortcuts(
   transformers: Array<Transformer> = TRANSFORMERS,
 ): () => void {
   const byType = transformersByType(transformers);
+  const elementTransformersForEnter = byType.element.filter(
+    t => t.triggerOnEnter,
+  );
   const textFormatTransformersByTrigger = indexBy(
     byType.textFormat,
     ({tag}) => tag[tag.length - 1],
@@ -444,6 +449,20 @@ export function registerMarkdownShortcuts(
     byType.textMatch,
     ({trigger}) => trigger,
   );
+  // Composition end fires per IME commit (every CJK syllable, German dead-key
+  // resolve, etc.). Most of those have nothing to do with markdown, so only
+  // enter the transformer pass when the just-committed character can plausibly
+  // close a trigger. Space covers element/multilineElement triggers (`# `,
+  // `- `, ...) and text-match triggers carry their own single-character triggers.
+  const compositionEndTriggerChars = new Set<string>([' ']);
+  for (const t of byType.textFormat) {
+    compositionEndTriggerChars.add(t.tag.slice(-1));
+  }
+  for (const t of byType.textMatch) {
+    if (t.trigger !== undefined) {
+      compositionEndTriggerChars.add(t.trigger);
+    }
+  }
 
   for (const transformer of transformers) {
     const type = transformer.type;
@@ -528,6 +547,13 @@ export function registerMarkdownShortcuts(
           return;
         }
 
+        // composition end commits the composed text without moving the
+        // selection (compositionupdate already did) and may jump the anchor by
+        // more than one when multi-character commits land at once. Skip the
+        // typed-character heuristics so a trailing trigger character can still
+        // fire its transform.
+        const isCompositionEnd = tags.has(COMPOSITION_END_TAG);
+
         const selection = editorState.read($getSelection);
         const prevSelection = prevEditorState.read($getSelection);
 
@@ -537,7 +563,7 @@ export function registerMarkdownShortcuts(
           !$isRangeSelection(prevSelection) ||
           !$isRangeSelection(selection) ||
           !selection.isCollapsed() ||
-          selection.is(prevSelection)
+          (selection.is(prevSelection) && !isCompositionEnd)
         ) {
           return;
         }
@@ -550,9 +576,20 @@ export function registerMarkdownShortcuts(
         if (
           !$isTextNode(anchorNode) ||
           !dirtyLeaves.has(anchorKey) ||
-          (anchorOffset !== 1 && anchorOffset > prevSelection.anchor.offset + 1)
+          (!isCompositionEnd &&
+            anchorOffset !== 1 &&
+            anchorOffset > prevSelection.anchor.offset + 1)
         ) {
           return;
+        }
+
+        if (isCompositionEnd) {
+          const closeChar = editorState.read(() => anchorNode.getTextContent())[
+            anchorOffset - 1
+          ];
+          if (!compositionEndTriggerChars.has(closeChar)) {
+            return;
+          }
         }
 
         editor.update(() => {
@@ -613,6 +650,13 @@ export function registerMarkdownShortcuts(
             anchorNode,
             anchorOffset,
             byType.multilineElement,
+            true,
+          ) ||
+          runElementTransformers(
+            parentNode,
+            anchorNode,
+            anchorOffset,
+            elementTransformersForEnter,
             true,
           )
         ) {

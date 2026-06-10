@@ -22,6 +22,7 @@ import type {
   SerializedElementNode,
 } from 'lexical';
 
+import invariant from '@lexical/internal/invariant';
 import {
   $findMatchingParent,
   $insertNodeToNearestRootAtCaret,
@@ -47,7 +48,6 @@ import {
   ElementNode,
   Spread,
 } from 'lexical';
-import invariant from 'shared/invariant';
 
 export type LinkAttributes = {
   rel?: null | string;
@@ -610,7 +610,7 @@ export function $isAutoLinkNode(
 
 export const TOGGLE_LINK_COMMAND: LexicalCommand<
   string | ({url: string} & LinkAttributes) | null
-> = createCommand('TOGGLE_LINK_COMMAND');
+> = /* @__PURE__ */ createCommand('TOGGLE_LINK_COMMAND');
 
 function $getPointNode(point: Point, offset: number): LexicalNode | null {
   if (point.type === 'element') {
@@ -814,9 +814,13 @@ export function $toggleLink(
           !$isAutoLinkNode(parent) && $isLinkNode(parent),
       );
       if (parentLink !== null) {
-        parentLink.getChildren().forEach(child => {
-          parentLink.insertBefore(child);
-        });
+        parentLink
+          .getParentOrThrow()
+          .splice(
+            parentLink.getIndexWithinParent(),
+            0,
+            parentLink.getChildren(),
+          );
         parentLink.remove();
       }
       return;

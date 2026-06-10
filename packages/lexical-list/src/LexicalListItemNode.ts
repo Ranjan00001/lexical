@@ -22,6 +22,7 @@ import type {
   Spread,
 } from 'lexical';
 
+import invariant from '@lexical/internal/invariant';
 import {
   $insertNodeToNearestRootAtCaret,
   addClassNamesToElement,
@@ -31,6 +32,7 @@ import {
   $applyNodeReplacement,
   $copyNode,
   $createParagraphNode,
+  $getSelection,
   $getSiblingCaret,
   $isElementNode,
   $isParagraphNode,
@@ -38,6 +40,7 @@ import {
   $isRootOrShadowRoot,
   $rewindSiblingCaret,
   $setDirectionFromDOM,
+  $setFormatFromDOM,
   buildImportMap,
   ElementNode,
   getStyleObjectFromCSS,
@@ -46,7 +49,6 @@ import {
   normalizeClassNames,
   setDOMStyleFromCSS,
 } from 'lexical';
-import invariant from 'shared/invariant';
 
 import {$createListNode, $isListNode} from './';
 import {$handleIndent, $handleOutdent, mergeLists} from './formatList';
@@ -296,14 +298,38 @@ export class ListItemNode extends ElementNode {
       list.insertAfter(replaceWithNode);
       replaceWithNode.insertAfter(newList);
     }
+    const toReplaceKey = this.__key;
+    let prevSizeBeforeChildrenTransfer = 0;
     if (includeChildren) {
       invariant(
         $isElementNode(replaceWithNode),
         'includeChildren should only be true for ElementNodes',
       );
-      this.getChildren().forEach((child: LexicalNode) => {
-        replaceWithNode.append(child);
-      });
+      prevSizeBeforeChildrenTransfer = replaceWithNode.getChildrenSize();
+      replaceWithNode.splice(
+        prevSizeBeforeChildrenTransfer,
+        0,
+        this.getChildren(),
+      );
+    }
+    // The base LexicalNode.replace remaps element-anchored selection points
+    // from the replaced node to the replacement, but this override skips
+    // super and the trailing this.remove() would otherwise drop selection
+    // onto a sibling list item via moveSelectionPointToSibling. Mirror the
+    // base behavior here for the element-anchored case.
+    if (includeChildren && $isElementNode(replaceWithNode)) {
+      const selection = $getSelection();
+      if ($isRangeSelection(selection)) {
+        for (const point of selection.getStartEndPoints()) {
+          if (point.key === toReplaceKey && point.type === 'element') {
+            point.set(
+              replaceWithNode.getKey(),
+              prevSizeBeforeChildrenTransfer + point.offset,
+              'element',
+            );
+          }
+        }
+      }
     }
     this.remove();
     if (list.getChildrenSize() === 0) {
@@ -639,7 +665,14 @@ function $convertListItemElement(domNode: HTMLElement): DOMConversionOutput {
       : ariaCheckedAttr === 'false'
         ? false
         : undefined;
-  return {node: $setDirectionFromDOM($createListItemNode(checked), domNode)};
+
+  const node = $createListItemNode(checked);
+  $setFormatFromDOM(node, domNode);
+
+  return {
+    after: setFormatFromChildren.bind(null, node),
+    node: $setDirectionFromDOM(node, domNode),
+  };
 }
 
 function $convertCheckboxInput(domNode: Element): DOMConversionOutput {
@@ -648,7 +681,26 @@ function $convertCheckboxInput(domNode: Element): DOMConversionOutput {
     return {node: null};
   }
   const checked = domNode.hasAttribute('checked');
-  return {node: $createListItemNode(checked)};
+  const node = $createListItemNode(checked);
+  return {after: setFormatFromChildren.bind(null, node), node};
+}
+
+function setFormatFromChildren(
+  listItemNode: ListItemNode,
+  children: LexicalNode[],
+): LexicalNode[] {
+  const firstChild = children[0];
+  // google doc sets the alignment of the <p> tag inside the <li>
+  if (
+    children.length === 1 &&
+    $isParagraphNode(firstChild) &&
+    !listItemNode.getFormatType() &&
+    firstChild.getFormatType()
+  ) {
+    listItemNode.setFormat(firstChild.getFormatType());
+    return firstChild.getChildren();
+  }
+  return children;
 }
 
 /**

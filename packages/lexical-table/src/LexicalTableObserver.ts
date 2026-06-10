@@ -6,6 +6,7 @@
  *
  */
 
+import invariant from '@lexical/internal/invariant';
 import {
   addClassNamesToElement,
   removeClassNamesFromElement,
@@ -28,7 +29,6 @@ import {
   SELECTION_CHANGE_COMMAND,
   type TextFormatType,
 } from 'lexical';
-import invariant from 'shared/invariant';
 
 import {$isTableCellNode, TableCellNode} from './LexicalTableCellNode';
 import {$isTableNode, TableNode} from './LexicalTableNode';
@@ -425,9 +425,10 @@ export class TableObserver {
   }
 
   $getAnchorTableCell(): TableCellNode | null {
-    return this.anchorCellNodeKey
+    const node = this.anchorCellNodeKey
       ? $getNodeByKey(this.anchorCellNodeKey)
       : null;
+    return $isTableCellNode(node) ? node : null;
   }
   $getAnchorTableCellOrThrow(): TableCellNode {
     const anchorTableCell = this.$getAnchorTableCell();
@@ -439,7 +440,10 @@ export class TableObserver {
   }
 
   $getFocusTableCell(): TableCellNode | null {
-    return this.focusCellNodeKey ? $getNodeByKey(this.focusCellNodeKey) : null;
+    const node = this.focusCellNodeKey
+      ? $getNodeByKey(this.focusCellNodeKey)
+      : null;
+    return $isTableCellNode(node) ? node : null;
   }
 
   $getFocusTableCellOrThrow(): TableCellNode {

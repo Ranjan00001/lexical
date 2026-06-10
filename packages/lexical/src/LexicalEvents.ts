@@ -11,16 +11,8 @@ import type {NodeKey} from './LexicalNode';
 import type {ElementNode} from './nodes/LexicalElementNode';
 import type {TextNode} from './nodes/LexicalTextNode';
 
-import {
-  CAN_USE_BEFORE_INPUT,
-  IS_ANDROID_CHROME,
-  IS_APPLE_WEBKIT,
-  IS_FIREFOX,
-  IS_IOS,
-  IS_SAFARI,
-} from 'shared/environment';
-import invariant from 'shared/invariant';
-import warnOnlyOnce from 'shared/warnOnlyOnce';
+import invariant from '@lexical/internal/invariant';
+import warnOnlyOnce from '@lexical/internal/warnOnlyOnce';
 
 import {
   $getPreviousSelection,
@@ -76,6 +68,14 @@ import {
   UNDO_COMMAND,
 } from '.';
 import {
+  CAN_USE_BEFORE_INPUT,
+  IS_ANDROID_CHROME,
+  IS_APPLE_WEBKIT,
+  IS_FIREFOX,
+  IS_IOS,
+  IS_SAFARI,
+} from './environment';
+import {
   BEFORE_INPUT_COMMAND,
   COMPOSITION_END_COMMAND,
   COMPOSITION_START_COMMAND,
@@ -98,8 +98,8 @@ import {
   $findMatchingParent,
   $flushMutations,
   $getAdjacentNode,
+  $getDOMTextNode,
   $getNodeByKey,
-  $isSelectionCapturedInDecorator,
   $isTokenOrSegmented,
   $isTokenOrTab,
   $setSelection,
@@ -111,7 +111,6 @@ import {
   getAnchorTextFromDOM,
   getDOMSelection,
   getDOMSelectionFromTarget,
-  getDOMTextNode,
   getEditorPropertyFromDOMNode,
   getEditorsToPropagate,
   getNearestEditorFromDOMNode,
@@ -127,6 +126,7 @@ import {
   isDeleteLineForward,
   isDeleteWordBackward,
   isDeleteWordForward,
+  isDOMCapturingSelection,
   isDOMNode,
   isDOMTextNode,
   isEscape,
@@ -264,7 +264,8 @@ function $shouldPreventDefaultAndInsertText(
     ((isBeforeInput || !CAN_USE_BEFORE_INPUT) &&
       backingAnchorElement !== null &&
       !anchorNode.isComposing() &&
-      domAnchorNode !== getDOMTextNode(backingAnchorElement)) ||
+      domAnchorNode !==
+        $getDOMTextNode(anchorNode, backingAnchorElement, editor)) ||
     // If TargetRange is not the same as the DOM selection; browser trying to edit random parts
     // of the editor.
     (domSelection !== null &&
@@ -521,22 +522,6 @@ function onClick(event: PointerEvent, editor: LexicalEditor): void {
         ) {
           domSelection.removeAllRanges();
           selection.dirty = true;
-        } else if (event.detail === 3 && !selection.isCollapsed()) {
-          // Triple click causing selection to overflow into the nearest element. In that
-          // case visually it looks like a single element content is selected, focus node
-          // is actually at the beginning of the next element (if present) and any manipulations
-          // with selection (formatting) are affecting second element as well
-          const focus = selection.focus;
-          const focusNode = focus.getNode();
-          if (anchorNode !== focusNode) {
-            const parentNode = $findMatchingParent(
-              anchorNode,
-              node => $isElementNode(node) && !node.isInline(),
-            );
-            if ($isElementNode(parentNode)) {
-              parentNode.select(0);
-            }
-          }
         }
       } else if (event.pointerType === 'touch' || event.pointerType === 'pen') {
         // This is used to update the selection on touch devices (including Apple Pencil) when the user clicks on text after a
@@ -575,7 +560,7 @@ function onPointerDown(event: PointerEvent, editor: LexicalEditor) {
     updateEditorSync(editor, () => {
       // Drag & drop should not recompute selection until mouse up; otherwise the initially
       // selected content is lost.
-      if (!$isSelectionCapturedInDecorator(target)) {
+      if (!isDOMCapturingSelection(target, editor)) {
         isSelectionChangeFromMouseDown = true;
       }
     });
@@ -797,6 +782,31 @@ function $handleBeforeInput(event: InputEvent): boolean {
         }
       } else {
         $setCompositionKey(null);
+
+        // iOS 10-key Korean IME (천지인/Chunjiin) does not fire compositionstart /
+        // compositionend events. Instead it sends a deleteContentBackward with a
+        // non-collapsed targetRange to delete the current composing jamo, immediately
+        // followed by insertText with the updated syllable.
+        //
+        // Because editor.isComposing() is always false for this keyboard type, Lexical
+        // would otherwise dispatch DELETE_CHARACTER_COMMAND, which ignores the
+        // targetRange entirely and deletes only one character before the cursor. This
+        // leaves orphaned jamo in the editor state that accumulate and corrupt output
+        // (e.g. typing "안녕하세요" produces "안녕하ᄉ세ᄋᄋ요").
+        //
+        // Fix: when on iOS with a non-collapsed targetRange, apply the range directly
+        // to the Lexical selection and delete the matched text. If applyDOMRange cannot
+        // resolve the range (returns a collapsed selection), fall through to the default
+        // Lexical deletion path.
+        if (IS_IOS && targetRange !== null && !targetRange.collapsed) {
+          selection.applyDOMRange(targetRange);
+          if (!selection.isCollapsed()) {
+            event.preventDefault();
+            selection.removeText();
+            return true;
+          }
+        }
+
         event.preventDefault();
         // Chromium Android at the moment seems to ignore the preventDefault
         // on 'deleteContentBackward' and still deletes the content. Which leads
@@ -1072,14 +1082,13 @@ function onInput(event: InputEvent, editor: LexicalEditor): void {
 }
 
 function $handleInput(event: InputEvent): boolean {
+  const editor = getActiveEditor();
   if (
     isHTMLElement(event.target) &&
-    $isSelectionCapturedInDecorator(event.target)
+    isDOMCapturingSelection(event.target, editor)
   ) {
     return true;
   }
-
-  const editor = getActiveEditor();
   const selection = $getSelection();
   const data = event.data;
   const targetRange = getTargetRange(event);
@@ -1142,6 +1151,8 @@ function $handleInput(event: InputEvent): boolean {
       !editor.isComposing()
     ) {
       selection.anchor.offset -= textLength;
+      selection._cachedNodes = null;
+      selection._cachedIsBackward = null;
     }
 
     // This ensures consistency on Android.
@@ -1229,7 +1240,10 @@ function $onCompositionEndImpl(editor: LexicalEditor, data?: string): void {
     if (data === '') {
       const node = $getNodeByKey(compositionKey);
       const domElement = editor.getElementByKey(compositionKey);
-      const textNode = getDOMTextNode(domElement);
+      const textNode =
+        domElement !== null && $isTextNode(node)
+          ? $getDOMTextNode(node, domElement, editor)
+          : null;
 
       if (
         textNode !== null &&
@@ -1497,7 +1511,8 @@ function onDocumentSelectionChange(event: Event): void {
   }
 }
 
-function stopLexicalPropagation(event: Event): void {
+/** @internal */
+export function stopLexicalPropagation(event: Event): void {
   // We attach a special property to ensure the same event doesn't re-fire
   // for parent editors.
   // @ts-ignore

@@ -12,25 +12,34 @@ import {
   $createTextNode,
   $getRoot,
   $getSelection,
+  $isElementNode,
   $isRangeSelection,
   createEditor,
-  ElementDOMSlot,
   ElementNode,
   LexicalEditor,
   LexicalNode,
   TextNode,
 } from 'lexical';
 import * as React from 'react';
-import {createRef, useEffect} from 'react';
+import {act, createRef, useEffect} from 'react';
 import {createRoot} from 'react-dom/client';
-import * as ReactTestUtils from 'shared/react-test-utils';
-import {afterEach, beforeEach, describe, expect, it, test} from 'vitest';
+import {
+  afterEach,
+  assert,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  test,
+} from 'vitest';
 
 import {
+  $assertNodeType,
   $createTestElementNode,
   createTestEditor,
 } from '../../../__tests__/utils';
-import {indexPath, SerializedElementNode} from '../../LexicalElementNode';
+import {ElementDOMSlot, indexPath} from '../../../LexicalDOMSlot';
+import {SerializedElementNode} from '../../LexicalElementNode';
 
 describe('LexicalElementNode tests', () => {
   let container: HTMLElement;
@@ -77,7 +86,7 @@ describe('LexicalElementNode tests', () => {
       return <div ref={ref} contentEditable={true} />;
     }
 
-    ReactTestUtils.act(() => {
+    act(() => {
       createRoot(container).render(<TestBase />);
     });
 
@@ -190,7 +199,10 @@ describe('LexicalElementNode tests', () => {
 
     test('some children', async () => {
       await update(() => {
-        const children = $getRoot().getFirstChild<ElementNode>()!.getChildren();
+        const children = $assertNodeType(
+          $getRoot().getFirstChild(),
+          $isElementNode,
+        ).getChildren();
         expect(children).toHaveLength(3);
       });
     });
@@ -199,9 +211,10 @@ describe('LexicalElementNode tests', () => {
   describe('getAllTextNodes()', () => {
     test('basic', async () => {
       await update(() => {
-        const textNodes = $getRoot()
-          .getFirstChild<ElementNode>()!
-          .getAllTextNodes();
+        const textNodes = $assertNodeType(
+          $getRoot().getFirstChild(),
+          $isElementNode,
+        ).getAllTextNodes();
         expect(textNodes).toHaveLength(3);
       });
     });
@@ -241,8 +254,7 @@ describe('LexicalElementNode tests', () => {
     test('basic', async () => {
       await update(() => {
         expect(
-          $getRoot()
-            .getFirstChild<ElementNode>()!
+          $assertNodeType($getRoot().getFirstChild(), $isElementNode)
             .getFirstChild()!
             .getTextContent(),
         ).toBe('Foo');
@@ -261,8 +273,7 @@ describe('LexicalElementNode tests', () => {
     test('basic', async () => {
       await update(() => {
         expect(
-          $getRoot()
-            .getFirstChild<ElementNode>()!
+          $assertNodeType($getRoot().getFirstChild(), $isElementNode)
             .getLastChild()!
             .getTextContent(),
         ).toBe('Baz');
@@ -346,7 +357,9 @@ describe('LexicalElementNode tests', () => {
 
     beforeEach(async () => {
       await update(() => {
-        block = $getRoot().getFirstChildOrThrow();
+        const firstChild = $getRoot().getFirstChildOrThrow();
+        assert($isElementNode(firstChild), 'Expected an ElementNode');
+        block = firstChild;
       });
     });
 
@@ -685,7 +698,10 @@ describe('LexicalElementNode tests', () => {
 
       await update(() => {
         block.splice(1, 0, [
-          $getRoot().getLastChild<ElementNode>()!.getChildAtIndex(1)!,
+          $assertNodeType(
+            $getRoot().getLastChild(),
+            $isElementNode,
+          ).getChildAtIndex(1)!,
         ]);
       });
 
